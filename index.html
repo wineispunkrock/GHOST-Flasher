@@ -78,7 +78,12 @@ connectBtn.onclick=async()=>{try{
 }catch(e){line('[ERROR] '+e.message);state('Connection failed.','err');await closeFlasher()}};
 flashBtn.onclick=async()=>{if(!loader)return;flashBtn.disabled=true;disconnectBtn.disabled=true;progress.style.width='0%';try{
  state('Loading GHOST firmware…');
- const defs=[['firmware/bootloader.bin',0x0000],['firmware/partitions.bin',0x8000],['firmware/boot_app0.bin',0xE000],['firmware/firmware.bin',0x10000]];
+ const defs=[
+  ['bootloader.bin',0x0000],
+  ['partitions.bin',0x8000],
+  ['boot_app0.bin',0xE000],
+  ['firmware.bin',0x10000]
+];
  const fileArray=[];for(const [path,address] of defs){const data=await loadBinary(path);fileArray.push({data,address});line('Loaded '+path+' -> 0x'+address.toString(16).toUpperCase())}
  state('Flashing GHOST… do not unplug USB.');
  await loader.writeFlash({fileArray,flashMode:'keep',flashFreq:'keep',flashSize:'keep',eraseAll:false,compress:true,
