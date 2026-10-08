@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GHOST Flasher</title>
+<script src="https://cdn.jsdelivr.net/npm/spark-md5@3.0.2/spark-md5.min.js"></script>
+<style>
+:root{color-scheme:dark;--bg:#050708;--panel:#0d1114;--line:#263139;--text:#eef6f8;--muted:#95a7ae;--accent:#38e7ff;--ok:#71f5ad;--err:#ff7585}
+*{box-sizing:border-box}body{margin:0;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;background:var(--bg);color:var(--text)}
+main{max-width:820px;margin:0 auto;padding:40px 20px 64px}.eyebrow{color:var(--accent);letter-spacing:.18em;font-size:.78rem}
+h1{margin:.35rem 0 .4rem;font-size:clamp(2rem,7vw,4rem);letter-spacing:.04em}.tag{margin:0 0 28px;color:var(--muted)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:22px;margin:18px 0}
+.version{color:var(--accent);font-weight:700}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+button{appearance:none;border:1px solid var(--accent);background:transparent;color:var(--accent);padding:12px 16px;border-radius:7px;font:inherit;cursor:pointer}
+button:hover:not(:disabled){background:rgba(56,231,255,.1)}button:disabled{opacity:.4;cursor:not-allowed}.primary{background:var(--accent);color:#001014;font-weight:800}
+.muted{color:var(--muted);font-size:.9rem;line-height:1.55}.ok{color:var(--ok)!important}.err{color:var(--err)!important}
+#progressOuter{height:10px;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-top:14px}#progress{height:100%;width:0;background:var(--accent)}
+#log,#terminal{min-height:170px;max-height:360px;overflow:auto;white-space:pre-wrap;background:#000;border:1px solid var(--line);border-radius:8px;padding:12px;color:#d8faff;margin-top:14px}
+ol{padding-left:1.35rem;line-height:1.65}
+</style>
+</head>
+<body>
+<main>
+<div class="eyebrow">GUEST HOSPITALITY ORGANIZATION &amp; SERVICE TERMINAL</div>
+<h1>GHOST</h1>
+<p class="tag">Hoysond ESP32-S3 browser flasher</p>
+
+<section class="card">
+<div>Release: <span class="version">GHOST v1.3.4</span></div>
+<p class="muted">Use current Chrome or Edge. This updater writes only the four GHOST firmware regions and does not perform a full-chip erase.</p>
+<ol>
+<li>Connect GHOST to this computer with USB.</li>
+<li>Click <strong>CONNECT GHOST</strong> and select the ESP32-S3 serial device.</li>
+<li>Click <strong>FLASH GHOST</strong>.</li>
+<li>Wait for <strong>FLASH COMPLETE</strong>.</li>
+</ol>
+<div class="row">
+<button id="connect" class="primary">CONNECT GHOST</button>
+<button id="flash" disabled>FLASH GHOST</button>
+<button id="disconnect" disabled>DISCONNECT</button>
+</div>
+<div id="status" class="muted">Not connected.</div>
+<div id="progressOuter"><div id="progress"></div></div>
+<pre id="log">Ready.</pre>
+</section>
+
+<section class="card">
+<h2>Serial Console</h2>
+<p class="muted">Fixed at 115200 baud. If the boot banner is missed, press GHOST Reset once.</p>
+<div class="row">
+<button id="openConsole">OPEN CONSOLE — 115200</button>
+<button id="closeConsole" disabled>CLOSE CONSOLE</button>
+</div>
+<pre id="terminal">Console closed.</pre>
+</section>
+
+<p class="muted">Flash map: 0x0000 bootloader · 0x8000 partitions · 0xE000 boot_app0 · 0x10000 firmware.</p>
+</main>
+
+<script type="module">
+import { ESPLoader, Transport } from "https://unpkg.com/esptool-js@0.6.1/bundle.js";
+const $=id=>document.getElementById(id);
+const log=$('log'),status=$('status'),progress=$('progress'),connectBtn=$('connect'),flashBtn=$('flash'),disconnectBtn=$('disconnect');
+let port=null,transport=null,loader=null;
+function line(s=''){log.textContent+=(log.textContent?'\n':'')+s;log.scrollTop=log.scrollHeight}
+function state(s,c='muted'){status.textContent=s;status.className=c}
+const terminalBridge={clean(){log.textContent=''},writeLine(d){line(d)},write(d){log.textContent+=d;log.scrollTop=log.scrollHeight}};
+async function loadBinary(path){const r=await fetch(path,{cache:'no-store'});if(!r.ok)throw new Error('Missing '+path+' ('+r.status+')');return new Uint8Array(await r.arrayBuffer())}
+async function closeFlasher(){try{if(transport)await transport.disconnect()}catch{}loader=null;transport=null;port=null;connectBtn.disabled=false;flashBtn.disabled=true;disconnectBtn.disabled=true}
+connectBtn.onclick=async()=>{try{
+ if(!('serial'in navigator))throw new Error('Web Serial unavailable. Use Chrome or Edge.');
+ log.textContent='';state('Choose the GHOST ESP32-S3 serial device…');
+ port=await navigator.serial.requestPort();transport=new Transport(port,true);
+ loader=new ESPLoader({transport,baudrate:921600,terminal:terminalBridge,debugLogging:false});
+ const chip=await loader.main();if(!String(chip).toUpperCase().includes('ESP32-S3'))throw new Error('Wrong chip detected: '+chip);
+ state('Connected: '+chip,'ok');connectBtn.disabled=true;flashBtn.disabled=false;disconnectBtn.disabled=false;
+}catch(e){line('[ERROR] '+e.message);state('Connection failed.','err');await closeFlasher()}};
+flashBtn.onclick=async()=>{if(!loader)return;flashBtn.disabled=true;disconnectBtn.disabled=true;progress.style.width='0%';try{
+ state('Loading GHOST firmware…');
+ const defs=[['firmware/bootloader.bin',0x0000],['firmware/partitions.bin',0x8000],['firmware/boot_app0.bin',0xE000],['firmware/firmware.bin',0x10000]];
+ const fileArray=[];for(const [path,address] of defs){const data=await loadBinary(path);fileArray.push({data,address});line('Loaded '+path+' -> 0x'+address.toString(16).toUpperCase())}
+ state('Flashing GHOST… do not unplug USB.');
+ await loader.writeFlash({fileArray,flashMode:'keep',flashFreq:'keep',flashSize:'keep',eraseAll:false,compress:true,
+ reportProgress:(i,w,t)=>{progress.style.width=(((i+w/t)/fileArray.length)*100).toFixed(1)+'%'},
+ calculateMD5Hash:(image)=>{const b=image.buffer.slice(image.byteOffset,image.byteOffset+image.byteLength);return window.SparkMD5.ArrayBuffer.hash(b)}});
+ progress.style.width='100%';line('FLASH COMPLETE — resetting GHOST.');state('FLASH COMPLETE','ok');await loader.after('hard_reset');await closeFlasher();
+}catch(e){line('[FLASH ERROR] '+e.message);state('Flash failed.','err');disconnectBtn.disabled=false;flashBtn.disabled=false}};
+disconnectBtn.onclick=async()=>{await closeFlasher();state('Disconnected.');line('Disconnected.')};
+
+let consolePort=null,reader=null;const terminal=$('terminal'),openConsole=$('openConsole'),closeConsole=$('closeConsole');
+openConsole.onclick=async()=>{try{consolePort=await navigator.serial.requestPort();await consolePort.open({baudRate:115200});terminal.textContent='';openConsole.disabled=true;closeConsole.disabled=false;
+const decoder=new TextDecoderStream();consolePort.readable.pipeTo(decoder.writable).catch(()=>{});reader=decoder.readable.getReader();
+while(true){const {value,done}=await reader.read();if(done)break;terminal.textContent+=value;terminal.scrollTop=terminal.scrollHeight}}
+catch(e){terminal.textContent+='\n[console] '+e.message+'\n'}};
+closeConsole.onclick=async()=>{try{if(reader){await reader.cancel();reader.releaseLock()}}catch{}try{if(consolePort)await consolePort.close()}catch{}reader=null;consolePort=null;openConsole.disabled=false;closeConsole.disabled=true;terminal.textContent+='\n[console closed]\n'};
+</script>
+</body></html>
