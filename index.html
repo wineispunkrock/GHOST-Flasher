@@ -66,7 +66,8 @@ let port=null,transport=null,loader=null;
 function line(s=''){log.textContent+=(log.textContent?'\n':'')+s;log.scrollTop=log.scrollHeight}
 function state(s,c='muted'){status.textContent=s;status.className=c}
 const terminalBridge={clean(){log.textContent=''},writeLine(d){line(d)},write(d){log.textContent+=d;log.scrollTop=log.scrollHeight}};
-async function loadBinary(path){const r=await fetch(path,{cache:'no-store'});if(!r.ok)throw new Error('Missing '+path+' ('+r.status+')');return new Uint8Array(await r.arrayBuffer())}
+const RELEASE_VERSION=document.querySelector('.version').textContent.trim().replace(/^GHOST\s+/,'');
+async function loadBinary(path){const url=path+'?release='+encodeURIComponent(RELEASE_VERSION);const r=await fetch(url,{cache:'reload'});if(!r.ok)throw new Error('Missing '+path+' ('+r.status+')');return new Uint8Array(await r.arrayBuffer())}
 async function closeFlasher(){try{if(transport)await transport.disconnect()}catch{}loader=null;transport=null;port=null;connectBtn.disabled=false;flashBtn.disabled=true;disconnectBtn.disabled=true}
 connectBtn.onclick=async()=>{try{
  if(!('serial'in navigator))throw new Error('Web Serial unavailable. Use Chrome or Edge.');
