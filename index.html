@@ -47,7 +47,7 @@ ol{padding-left:1.35rem;line-height:1.65}
 
 <section class="card">
 <h2>Serial Console</h2>
-<p class="muted">Fixed at 115200 baud. If the boot banner is missed, press GHOST Reset once.</p>
+<p class="muted">Fixed at 115200 baud. After Reset, the console attempts to reconnect automatically. If browser permission expires, click OPEN CONSOLE.</p>
 <div class="row">
 <button id="openConsole">OPEN CONSOLE — 115200</button>
 <button id="closeConsole" disabled>CLOSE CONSOLE</button>
@@ -94,11 +94,88 @@ flashBtn.onclick=async()=>{if(!loader)return;flashBtn.disabled=true;disconnectBt
 }catch(e){line('[FLASH ERROR] '+e.message);state('Flash failed.','err');disconnectBtn.disabled=false;flashBtn.disabled=false}};
 disconnectBtn.onclick=async()=>{await closeFlasher();state('Disconnected.');line('Disconnected.')};
 
-let consolePort=null,reader=null;const terminal=$('terminal'),openConsole=$('openConsole'),closeConsole=$('closeConsole');
-openConsole.onclick=async()=>{try{consolePort=await navigator.serial.requestPort();await consolePort.open({baudRate:115200});terminal.textContent='';openConsole.disabled=true;closeConsole.disabled=false;
-const decoder=new TextDecoderStream();consolePort.readable.pipeTo(decoder.writable).catch(()=>{});reader=decoder.readable.getReader();
-while(true){const {value,done}=await reader.read();if(done)break;terminal.textContent+=value;terminal.scrollTop=terminal.scrollHeight}}
-catch(e){terminal.textContent+='\n[console] '+e.message+'\n'}};
-closeConsole.onclick=async()=>{try{if(reader){await reader.cancel();reader.releaseLock()}}catch{}try{if(consolePort)await consolePort.close()}catch{}reader=null;consolePort=null;openConsole.disabled=false;closeConsole.disabled=true;terminal.textContent+='\n[console closed]\n'};
+let consolePort=null,reader=null,consoleWanted=false,consoleConnecting=false,consoleClosing=false;
+let lastPortInfo=null,reconnectTimer=null;
+const terminal=$('terminal'),openConsole=$('openConsole'),closeConsole=$('closeConsole');
+const consoleStatus=document.createElement('div');
+consoleStatus.className='muted';consoleStatus.id='consoleStatus';consoleStatus.textContent='Console disconnected.';
+terminal.before(consoleStatus);
+function consoleLine(message){terminal.textContent+='\n[console] '+message+'\n';terminal.scrollTop=terminal.scrollHeight}
+function consoleButtons(){openConsole.disabled=consoleConnecting||!!consolePort;closeConsole.disabled=!consoleWanted}
+function consoleInfo(port){try{return port.getInfo()}catch{return {}}}
+function matchingPort(info){return info&&lastPortInfo&&info.usbVendorId===lastPortInfo.usbVendorId&&info.usbProductId===lastPortInfo.usbProductId}
+function stopReconnect(){if(reconnectTimer){clearTimeout(reconnectTimer);reconnectTimer=null}}
+async function findAuthorizedPort(){
+  const ports=await navigator.serial.getPorts();
+  return ports.find(p=>matchingPort(consoleInfo(p)))||null;
+}
+async function startConsole(port){
+  if(!consoleWanted||consoleConnecting||consolePort)return;
+  consoleConnecting=true;consoleStatus.textContent='Connecting console…';consoleButtons();
+  let streamReader=null;
+  try{
+    await port.open({baudRate:115200});
+    if(!consoleWanted){await port.close();return}
+    consolePort=port;lastPortInfo=consoleInfo(port);
+    consoleStatus.textContent='Console connected — 115200 baud';consoleLine('CONNECTED — 115200');
+    const decoder=new TextDecoder();
+    streamReader=port.readable.getReader();reader=streamReader;
+    consoleButtons();
+    while(consoleWanted){
+      const {value,done}=await streamReader.read();
+      if(done)break;
+      terminal.textContent+=decoder.decode(value,{stream:true});
+      terminal.scrollTop=terminal.scrollHeight;
+    }
+  }catch(e){
+    if(consoleWanted)consoleLine('Connection lost: '+e.message);
+  }finally{
+    if(streamReader){try{streamReader.releaseLock()}catch{}}
+    reader=null;
+    if(consolePort===port)consolePort=null;
+    try{await port.close()}catch{}
+    consoleConnecting=false;consoleButtons();
+    if(consoleWanted&&!consoleClosing){
+      consoleStatus.textContent='RECONNECTING — waiting for GHOST USB…';
+      queueReconnect();
+    }else{consoleStatus.textContent='Console disconnected.'}
+  }
+}
+function queueReconnect(){
+  if(!consoleWanted||reconnectTimer||consoleConnecting||consolePort)return;
+  reconnectTimer=setTimeout(async()=>{
+    reconnectTimer=null;
+    if(!consoleWanted)return;
+    try{
+      const port=await findAuthorizedPort();
+      if(port){await startConsole(port);return}
+      consoleStatus.textContent='RECONNECTING — waiting for GHOST USB…';
+    }catch(e){consoleStatus.textContent='Reconnect needs permission — click OPEN CONSOLE';consoleLine(e.message)}
+    queueReconnect();
+  },1000);
+}
+openConsole.onclick=async()=>{
+  if(!('serial'in navigator)){consoleLine('Web Serial unavailable. Use Chrome or Edge.');return}
+  stopReconnect();consoleWanted=true;consoleClosing=false;consoleButtons();
+  try{
+    // Explicit click supplies the gesture browsers need if permission was revoked.
+    const port=await navigator.serial.requestPort();
+    lastPortInfo=consoleInfo(port);
+    await startConsole(port);
+  }catch(e){
+    consoleWanted=false;consoleStatus.textContent='Connection requires user action';
+    consoleLine(e.message);consoleButtons();
+  }
+};
+closeConsole.onclick=async()=>{
+  consoleClosing=true;consoleWanted=false;stopReconnect();
+  if(reader){try{await reader.cancel()}catch{}}
+  if(consolePort){try{await consolePort.close()}catch{}}
+  consoleButtons();consoleLine('CLOSED BY USER');
+};
+if('serial'in navigator){
+  navigator.serial.addEventListener('connect',()=>{if(consoleWanted){stopReconnect();queueReconnect()}});
+  navigator.serial.addEventListener('disconnect',()=>{if(consoleWanted){consoleStatus.textContent='RECONNECTING — USB reset detected';queueReconnect()}});
+}
 </script>
 </body></html>
